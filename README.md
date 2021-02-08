@@ -1,4 +1,4 @@
-# caddy-exec
+# caddy-awslambda
 
 Caddy v2 module for dispatching requests to AWS Lambda.
 
