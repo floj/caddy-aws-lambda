@@ -1,46 +1,32 @@
-package command
+package caddyawslambda
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/caddyserver/caddy/v2"
+	"github.com/pkg/errors"
 	"go.uber.org/zap"
 )
 
 // Cmd is the module configuration
 type Cmd struct {
 	// The command to run.
-	Command string `json:"command,omitempty"`
-
-	// The command args.
-	Args []string `json:"args,omitempty"`
-
-	// The directory to run the command from.
-	// Defaults to current directory.
-	Directory string `json:"directory,omitempty"`
-
-	// If the command should run in the foreground.
-	// By default, commands run in the background and doesn't
-	// affect Caddy.
-	// Setting this makes the command run in the foreground.
-	// Note that failure of a startup command running in the
-	// foreground may prevent Caddy from starting.
-	Foreground bool `json:"foreground,omitempty"`
+	Function string `json:"function,omitempty"`
 
 	// Timeout for the command. The command will be killed
 	// after timeout has elapsed if it is still running.
 	// Defaults to 10s.
 	Timeout string `json:"timeout,omitempty"`
 
-	// When the command should run. This can contain either of
-	// "startup" or "shutdown".
-	At []string `json:"at,omitempty"`
-
-	timeout time.Duration       // ease of use after parsing timeout string
-	at      map[string]struct{} // for quicker access and uniqueness.
+	timeout time.Duration // ease of use after parsing timeout string
 	log     *zap.Logger
+
+	svc *lambda.Client
 }
 
 // Provision implements caddy.Provisioner.
@@ -57,55 +43,52 @@ func (m *Cmd) provision(ctx caddy.Context, cm caddy.Module) error {
 	}
 	m.timeout = dur
 
-	// at
-	if m.at == nil {
-		m.at = map[string]struct{}{}
-	}
-	for _, at := range m.At {
-		m.at[at] = struct{}{}
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("unable to load SDK config, %w", err)
 	}
 
+	m.svc = lambda.NewFromConfig(cfg)
 	return nil
 }
 
 // Validate implements caddy.Validator.
 func (m Cmd) validate() error {
-	if m.Command == "" {
-		return fmt.Errorf("command is required")
+	if m.Function == "" {
+		return fmt.Errorf("function is required")
 	}
-
-	if err := isValidDir(m.Directory); err != nil {
-		return err
-	}
-
-	for _, at := range m.At {
-		switch at {
-		case "startup":
-		case "shutdown":
-		default:
-			return fmt.Errorf("'at' can only contain one of 'startup' or 'shutdown'")
-		}
-	}
-
 	return nil
 }
 
-func (m Cmd) isRoute() bool {
-	return len(m.At) == 0 && len(m.at) == 0
-}
+func (m *Cmd) invokeLambda(ctx context.Context, req *Request) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, m.timeout)
+	defer cancel()
 
-func isValidDir(dir string) error {
-	// current directory is valid
-	if dir == "" {
-		return nil
-	}
-
-	s, err := os.Stat(dir)
+	payload, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !s.IsDir() {
-		return fmt.Errorf("not a directory '%s'", dir)
+
+	log := m.log.With(zap.Any("function", []string{m.Function}))
+	startTime := time.Now()
+
+	resp, err := m.svc.Invoke(ctx, &lambda.InvokeInput{
+		FunctionName: &m.Function,
+		Payload:      payload,
+	})
+
+	log = log.With(zap.Duration("duration", time.Since(startTime))).Named("exit")
+	if err != nil {
+		log.Error("", zap.Error(err))
+		return nil, err
 	}
-	return nil
+
+	if resp.FunctionError != nil {
+		err = fmt.Errorf("Function error: %s: %w", *resp.FunctionError, errors.New(string(resp.Payload)))
+		log.Error("", zap.Error(err))
+		return nil, err
+	}
+
+	log.Info("")
+	return resp.Payload, nil
 }

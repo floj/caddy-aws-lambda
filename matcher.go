@@ -1,4 +1,4 @@
-package command
+package caddyawslambda
 
 import (
 	"net/http"

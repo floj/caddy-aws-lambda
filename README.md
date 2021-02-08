@@ -6,7 +6,7 @@ Caddy v2 module for running one-off commands.
 
 ```
 xcaddy build \
-    --with github.com/abiosoft/caddy-exec
+    --with github.com/floj/caddy-aws-lambda
 ```
 
 ## Usage 

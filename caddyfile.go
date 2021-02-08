@@ -1,8 +1,6 @@
-package command
+package caddyawslambda
 
 import (
-	"github.com/caddyserver/caddy/v2"
-	"github.com/caddyserver/caddy/v2/caddyconfig"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 )
@@ -30,46 +28,23 @@ func parseHandlerCaddyfile(h httpcaddyfile.Helper) ([]httpcaddyfile.ConfigValue,
 		return nil, err
 	}
 
-	// if there's a matcher, return as http handler
-	if c.isRoute() {
-		m := Middleware{Cmd: c}
-		return h.NewRoute(matcherSet, m), nil
-	}
-
-	// otherwise, non-http handler
-	// wrap with a NoOpMatcher to prevent http requests.
 	m := Middleware{Cmd: c}
-
-	rawMsg := caddyconfig.JSON(NoOpMatcher{}, nil)
-	matcherSet = caddy.ModuleMap{
-		NoOpMatcher{}.CaddyModule().ID.Name(): rawMsg,
-	}
-
 	return h.NewRoute(matcherSet, m), nil
-
 }
 
 // UnmarshalCaddyfile configures the global directive from Caddyfile.
 // Syntax:
 //
-//   exec [<matcher>] [<command> [<args...>]] {
-//       command     <text>
-//       args        <text>...
-//       directory   <text>
-//       timeout     <duration>
-//       foreground
-//       startup
-//       shutdown
+//   awslambda [<matcher>] [<function name>] {
+//       function <text>
+//       timeout  <duration>
 //   }
 //
 func (m *Cmd) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
-	// consume "exec", then grab the command, if present.
+	// consume "awslambda", then grab the command, if present.
 	if d.NextArg() && d.NextArg() {
-		m.Command = d.Val()
+		m.Function = d.Val()
 	}
-
-	// everything else are args, if present.
-	m.Args = d.RemainingArgs()
 
 	// parse the next block
 	return m.unmarshalBlock(d)
@@ -78,28 +53,13 @@ func (m *Cmd) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 func (m *Cmd) unmarshalBlock(d *caddyfile.Dispenser) error {
 	for d.NextBlock(0) {
 		switch d.Val() {
-		case "command":
-			if m.Command != "" {
-				return d.Err("command specified twice")
+		case "function":
+			if m.Function != "" {
+				return d.Err("function specified twice")
 			}
-			if !d.Args(&m.Command) {
+			if !d.Args(&m.Function) {
 				return d.ArgErr()
 			}
-		case "args":
-			if len(m.Args) > 0 {
-				return d.Err("args specified twice")
-			}
-			m.Args = d.RemainingArgs()
-		case "directory":
-			if !d.Args(&m.Directory) {
-				return d.ArgErr()
-			}
-		case "foreground":
-			m.Foreground = true
-		case "startup":
-			m.At = append(m.At, "startup")
-		case "shutdown":
-			m.At = append(m.At, "shutdown")
 		case "timeout":
 			if !d.Args(&m.Timeout) {
 				return d.ArgErr()
