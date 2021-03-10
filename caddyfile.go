@@ -3,69 +3,53 @@ package caddyawslambda
 import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 )
 
-// parseHandlerCaddyfile unmarshals tokens from h into a new Middleware.
-func parseHandlerCaddyfile(h httpcaddyfile.Helper) ([]httpcaddyfile.ConfigValue, error) {
-	if !h.Next() {
-		return nil, h.ArgErr()
-	}
-	var c Cmd
+func init() {
+	httpcaddyfile.RegisterHandlerDirective("awslambda", parseCaddyfile)
+}
 
-	// logic copied from RegisterHandlerDirective to customize.
-	matcherSet, ok, err := h.MatcherToken()
+func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
+	m := &LambdaMiddleware{}
+	err := m.UnmarshalCaddyfile(h.Dispenser)
 	if err != nil {
 		return nil, err
 	}
-	if ok {
-		h.Dispenser.Delete()
-	}
-	h.Dispenser.Reset()
-
-	// parse Caddyfile
-	err = c.UnmarshalCaddyfile(h.Dispenser)
-	if err != nil {
-		return nil, err
-	}
-
-	m := Middleware{Cmd: c}
-	return h.NewRoute(matcherSet, m), nil
+	return m, nil
 }
 
 // UnmarshalCaddyfile configures the global directive from Caddyfile.
 // Syntax:
 //
-//   awslambda [<matcher>] [<function name>] {
-//       function <text>
+//   awslambda [<matcher>] {
+//       function <function name>
 //       timeout  <duration>
 //   }
-//
-func (m *Cmd) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
-	// consume "awslambda", then grab the command, if present.
-	if d.NextArg() && d.NextArg() {
-		m.Function = d.Val()
-	}
-
-	// parse the next block
-	return m.unmarshalBlock(d)
-}
-
-func (m *Cmd) unmarshalBlock(d *caddyfile.Dispenser) error {
-	for d.NextBlock(0) {
-		switch d.Val() {
-		case "function":
-			if m.Function != "" {
-				return d.Err("function specified twice")
-			}
-			if !d.Args(&m.Function) {
-				return d.ArgErr()
-			}
-		case "timeout":
-			if !d.Args(&m.Timeout) {
-				return d.ArgErr()
+func (m *LambdaMiddleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	for d.Next() {
+		if d.NextArg() {
+			return d.ArgErr()
+		}
+		for d.NextBlock(0) {
+			switch d.Val() {
+			case "function":
+				if m.FunctionName != "" {
+					return d.Err("function already specified")
+				}
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				m.FunctionName = d.Val()
+			case "timeout":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				m.Timeout = d.Val()
+			default:
+				return d.Errf("unrecognized subdirective: %s", d.Val())
 			}
 		}
 	}
-
 	return nil
 }
